@@ -1,4 +1,5 @@
-streamlit==1.35.0
-pandas==2.2.0
-clickhouse-connect==0.7.3
-plotly==5.20.0
+streamlit
+pandas
+clickhouse-connect
+plotly
+matplotlib
