@@ -62,6 +62,7 @@ if st.sidebar.button("Executar Análise"):
         client = connect_to_clickhouse()
         
         # Mostrar informação sobre o período analisado
+        st.info("As datas estão em GMT, considere sempre colocar 3 horas na frente a data final.")
         st.info(f"Analisando commits de {start_datetime} até {end_datetime}")
         
         # Separar a interface em três seções usando abas
