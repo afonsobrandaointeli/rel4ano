@@ -275,30 +275,28 @@ if st.sidebar.button("Executar Análise"):
             else:
                 st.success("Todos os alunos fizeram commits durante a sprint!")
         
-        # Query 3: Alunos com commits posteriores ao prazo
+        # Query 3: Repositórios com commits posteriores ao prazo e seus colaboradores
         with tab3:
-            st.header("Alunos com Commits Apenas Após o Prazo")
+            st.header("Repositórios com Commits Após o Prazo e Seus Colaboradores")
             
-            query3 = f"""
+            # Primeiro, obter todos os commits realizados após o prazo
+            query3_commits = f"""
             SELECT 
-                c.author,
-                c.repo_name,
-                parseDateTimeBestEffort(c.date) AS commit_date,
-                c.message AS ultimo_commit_message
-            FROM commits c
-            JOIN (
-                SELECT 
-                    author,
-                    MAX(parseDateTimeBestEffort(date)) AS max_date
+                author,
+                repo_name,
+                parseDateTimeBestEffort(date) AS commit_date,
+                message
+            FROM commits
+            WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
+            AND author NOT IN ('Inteli Hub', 'José Romualdo')
+            AND parseDateTimeBestEffort(date) >= '{end_datetime}'
+            AND author IN (
+                -- Autores que não têm commits dentro do prazo
+                SELECT DISTINCT author
                 FROM commits
                 WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
                 AND author NOT IN ('Inteli Hub', 'José Romualdo')
-                AND author IN (
-                    SELECT DISTINCT author
-                    FROM commits
-                    WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
-                    AND parseDateTimeBestEffort(date) >= '{end_datetime}'
-                )
+                AND parseDateTimeBestEffort(date) >= '{end_datetime}'
                 AND author NOT IN (
                     SELECT DISTINCT author
                     FROM commits
@@ -306,29 +304,115 @@ if st.sidebar.button("Executar Análise"):
                     AND parseDateTimeBestEffort(date) >= '{start_datetime}'
                     AND parseDateTimeBestEffort(date) < '{end_datetime}'
                 )
-                GROUP BY author
-            ) latest ON c.author = latest.author AND parseDateTimeBestEffort(c.date) = latest.max_date
-            WHERE (c.repo_name ILIKE '%INTERNO%' OR c.repo_name ILIKE '%PUBLICO%')
-            ORDER BY c.author
+            )
+            ORDER BY parseDateTimeBestEffort(date) DESC
             """
             
-            result3 = client.query(query3)
+            result3_commits = client.query(query3_commits)
             
-            if result3.result_rows:
+            if result3_commits.result_rows:
                 # Criar DataFrame com os resultados
-                df3 = query_to_dataframe(result3)
+                df_commits = query_to_dataframe(result3_commits)
                 
-                # Formatar a coluna de data para facilitar a leitura
-                if 'commit_date' in df3.columns:
-                    # Converter para timezone de São Paulo
-                    df3['commit_date'] = pd.to_datetime(df3['commit_date']).dt.tz_localize('UTC').dt.tz_convert('America/Sao_Paulo')
-                    df3['commit_date'] = df3['commit_date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                # Verificar se temos as colunas esperadas
+                if len(df_commits.columns) >= 4:
+                    # Garantir nomes de colunas consistentes
+                    if 'commit_date' in df_commits.columns:
+                        # Converter para timezone de São Paulo
+                        df_commits['commit_date'] = pd.to_datetime(df_commits['commit_date']).dt.tz_localize('UTC').dt.tz_convert('America/Sao_Paulo')
+                        df_commits['commit_date'] = df_commits['commit_date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Exibir a lista de todos os commits após o prazo
+                    st.subheader("Lista de todos os commits realizados após o prazo")
+                    st.dataframe(df_commits, use_container_width=True)
+                    
+                # Agora, consulta para obter repositórios e colaboradores
+                query3 = f"""
+                WITH repos AS (
+                    -- Repositórios com commits após o prazo (de autores que não cumpriram o prazo)
+                    SELECT DISTINCT 
+                        repo_name
+                    FROM commits
+                    WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
+                    AND author NOT IN ('Inteli Hub', 'José Romualdo')
+                    AND parseDateTimeBestEffort(date) >= '{end_datetime}'
+                    AND author IN (
+                        -- Autores que não têm commits dentro do prazo
+                        SELECT DISTINCT author
+                        FROM commits
+                        WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
+                        AND parseDateTimeBestEffort(date) >= '{end_datetime}'
+                        AND author NOT IN (
+                            SELECT DISTINCT author
+                            FROM commits
+                            WHERE (repo_name ILIKE '%INTERNO%' OR repo_name ILIKE '%PUBLICO%')
+                            AND parseDateTimeBestEffort(date) >= '{start_datetime}'
+                            AND parseDateTimeBestEffort(date) < '{end_datetime}'
+                        )
+                    )
+                )
+                -- Obter todos os autores desses repositórios, independente de quando fizeram commits
+                SELECT DISTINCT
+                    c.repo_name,
+                    c.author
+                FROM commits c
+                JOIN repos r ON c.repo_name = r.repo_name
+                WHERE c.author NOT IN ('Inteli Hub', 'José Romualdo')
+                ORDER BY c.repo_name, c.author
+                """
                 
-                # Mostrar a tabela
-                st.dataframe(df3, use_container_width=True)
-                st.warning(f"Total de {len(df3)} alunos com commits apenas após o prazo")
+                result3 = client.query(query3)
+                
+                if result3.result_rows:
+                    # Criar DataFrame com os resultados
+                    df3 = query_to_dataframe(result3)
+                    
+                    # Mostrar as colunas disponíveis (para debug)
+                    st.text(f"Colunas disponíveis: {df3.columns.tolist()}")
+                    
+                    # Verificar quais colunas estão disponíveis
+                    if len(df3.columns) >= 2:
+                        # Usar os primeiros dois campos para repositório e autor
+                        repo_col = df3.columns[0]
+                        author_col = df3.columns[1]
+                        
+                        # Renomear para clareza
+                        df3 = df3.rename(columns={
+                            repo_col: 'Repositório',
+                            author_col: 'Autor'
+                        })
+                        
+                        # Exibir a tabela completa primeiro
+                        st.subheader("Lista completa de colaboradores por repositório")
+                        st.dataframe(df3, use_container_width=True)
+                        
+                        # Agrupar por repositório
+                        repos = df3['Repositório'].unique()
+                        
+                        # Para cada repositório, exibir a lista de autores
+                        for repo in repos:
+                            # Filtrar apenas os autores deste repositório
+                            authors = df3[df3['Repositório'] == repo]['Autor'].tolist()
+                            
+                            # Exibir o nome do repositório e a lista de autores
+                            st.markdown(f"### {repo}")
+                            st.markdown(f"**Total de {len(authors)} colaboradores**")
+                            
+                            # Exibir a lista de autores como texto formatado
+                            author_list = ", ".join(authors)
+                            st.markdown(f"**Colaboradores:** {author_list}")
+                            
+                            # Adicionar uma linha divisória
+                            st.markdown("---")
+                        
+                        # Exibir resumo
+                        st.warning(f"Total de {len(repos)} repositórios que tiveram commits após o prazo")
+                    else:
+                        st.error(f"Estrutura de dados inesperada. Colunas: {df3.columns.tolist()}")
+                else:
+                    st.warning("Não foi possível obter a lista de colaboradores por repositório.")
             else:
-                st.success("Nenhum aluno realizou commits apenas após o prazo!")
+                st.success("Nenhum repositório tem commits após o prazo da sprint!")
                 
     except Exception as e:
         st.error(f"Erro ao conectar ou consultar o ClickHouse: {str(e)}")
@@ -355,8 +439,8 @@ else:
         st.write("Lista os alunos que não fizeram commits durante o período da sprint (mas têm commits posteriores).")
     
     with col3:
-        st.markdown("#### Commits Após o Prazo")
-        st.write("Mostra alunos que só fizeram commits após o término da sprint, sem atividade durante o período oficial.")
+        st.markdown("#### Repositórios Após o Prazo")
+        st.write("Mostra repositórios com commits após o prazo e lista os colaboradores que não cumpriram o prazo da sprint.")
 
 # Rodapé com informações
 st.sidebar.markdown("---")
